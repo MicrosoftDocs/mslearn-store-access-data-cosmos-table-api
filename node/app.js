@@ -1,117 +1,65 @@
 const util = require("util");
-const storage = require("azure-storage");
+const AzureTables = require("@azure/data-tables");
+const prompt = require('prompt-sync')({sigint: true});
 
 require("dotenv").config();
 
-const tableService = storage.createTableService();
-const entGen = storage.TableUtilities.entityGenerator;
+//const tableService = storage.createTableService();
+//const entGen = storage.TableUtilities.entityGenerator;
 
-const createTable = async tableName => {
-  return new Promise((resolve, reject) => {
-    tableService.createTableIfNotExists(tableName, err => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
-  });
-};
+const tableName = "lensestable";
 
-const insertOrMergeEntity = async (tableName, entity) => {
-  return new Promise((resolve, reject) => {
-    tableService.insertOrMergeEntity(tableName, entity, err => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
-  });
-};
+const { TableClient } = require("@azure/data-tables")
+const tableClient = 
+    TableClient.fromConnectionString(process.env.AZURE_TABLES_CONNECTION_STRING, tableName)
 
-const queryTable = async (tableName, query) => {
-  return new Promise((resolve, reject) => {
-    tableService.queryEntities(tableName, query, null, (err, res) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(res);
-      }
-    });
-  });
-};
 
-const insertLens = async (
-  tableName,
-  lensType,
-  partNumber,
-  focalLength,
-  aperture
-) => {
-  const entity = {
-    PartitionKey: entGen.String(lensType),
-    RowKey: entGen.String(partNumber),
-    FocalLength: entGen.String(focalLength),
-    Aperture: entGen.String(aperture)
-  };
+async function populateTable() {
+    console.log("The Lenses table will be created if it does not exist");
+    await tableClient.createTable();
+    
+    console.log("Adding data to the Lenses table...");
+    await tableClient.upsertEntity( {partitionKey: "Prime", rowKey: "X5018", focalLength: "50mm", aperture: "f1.8"});
+    await tableClient.upsertEntity( {partitionKey: "Zoom", rowKey: "X357035", focalLength: "35-70mm", aperture: "f3.5"});
+    await tableClient.upsertEntity( {partitionKey: "Macro", rowKey: "X10028", focalLength: "100mm", aperture: "f2.8"});
 
-  return insertOrMergeEntity(tableName, entity);
-};
+    console.log("Table created and populated.");
+}
 
-(async () => {
-  const tableName = "lensestable";
-  const command = process.argv[2];
-  console.log(command);
-  if (command === "PopulateTable") {
-    console.log("Creating the Lenses table...");
-    await createTable(tableName, null);
-    console.log("Table created. Populating...");
-    await insertLens(tableName, "Prime", "X5018", "50mm", "f1.8");
-    await insertLens(tableName, "Zoom", "X357035", "35-70mm", "f3.5");
-    await insertLens(tableName, "Macro", "X10028", "100mm", "f2.8");
-    console.log("Tables created and populated.");
-  } else if (command === "DisplayTable") {
+async function displayTable() {
     console.log("Reading the contents of the Lenses table...");
+    let entities = tableClient.listEntities();
+    let i=1;
+    for await (const entity of entities) {
+      console.log(`${i}: Lens Type (PartitionKey): ${entity.partitionKey}  Part Number (RowKey): ${entity.rowKey}  Focal Length: ${entity.focalLength}  Aperture: ${entity.aperture}`);
+      i++;
+    }    
+}
 
-    const logRow = a => {
-      const space = [14, 20, 15, 10];
-      console.log(
-        "|" + a.map((e, i) => e.padStart(space[i], " ")).join(" |") + " |"
-      );
-    };
 
-    try {
-      const result = await queryTable(tableName, new storage.TableQuery());
-      const header = ["Lens Type", "Part Number", "Focal Length", "Aperture"];
-      logRow(header);
-      for (const lens of result.entries) {
-        logRow([
-          lens.PartitionKey._,
-          lens.RowKey._,
-          lens.FocalLength._,
-          lens.Aperture._
-        ]);
-      }
-    } catch (error) {
-      console.error(`Error: ${error.message}`);
-      return;
-    }
-  } else if (command === "AddLens") {
-    if (process.argv.length < 7) {
-      console.log(
-        "Usage: AddLens <LensType> <PartNumber> <FocalLength> <Aperture>"
-      );
-      return;
-    }
-    console.log(`Adding your ${process.argv[3]} lens...`);
-    await insertLens(
-      tableName,
-      process.argv[3],
-      process.argv[4],
-      process.argv[5],
-      process.argv[6]
-    );
+async function addLens() {
+    const lensType = process.argv[3];
+    const partNumber = process.argv[4];
+    const focalLength = process.argv[5];
+    const aperture = process.argv[6];
+
+    console.log(`Adding ${lensType} to the Lenses table...`);
+    await tableClient.upsertEntity( {partitionKey: lensType, rowKey: partNumber, focalLength: focalLength, aperture: aperture});
     console.log("Lens added.");
-  }
-})();
+}
+
+
+async function main() {
+    const command = process.argv[2];
+    if (command === "PopulateTable") {
+      populateTable();
+    } else if (command === "DisplayTable") {
+      displayTable();
+    } else if (command === "AddLens") {
+      addLens();
+    } else {
+      console.log("Usage: node app.js (PopulateTable|DisplayTable|AddLens) <lens-type> <part-number> <focal-length> <aperture>");
+    }
+}
+
+main();
